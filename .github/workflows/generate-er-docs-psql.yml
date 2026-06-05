@@ -1,0 +1,209 @@
+name: Generate and Publish ER Documentation (PostgreSQL)
+
+# ----------------------------------------------------------------------------------------
+# Reusable workflow that:
+#   1. Checks out Flyway/SQL migration files from a configurable source repo
+#   2. Spins up a throwaway PostgreSQL database (service container)
+#   3. Applies the migrations with Flyway
+#   4. Documents the resulting schema with tbls (Markdown + Mermaid ERD)
+#   5. Publishes the output to ris-reports via digitalservicebund/add-ris-report
+#
+# Cross-repo usage (same-org callers with secrets: inherit):
+#   uses: digitalservicebund/tbls-workflows/.github/workflows/generate-er-docs-psql.yml@main
+#   with:
+#     source-repo: digitalservicebund/ris-backend-service
+#     source-ref: 3d0ec38eef7c8536b9d55ebf2de530f5465e5503
+#     database-name: caselaw
+#     migrations-path: backend/src/main/resources/db-scripts/migration
+#     destination-path: entity-relationship-diagrams-v2/ris-backend-service
+#     flyway-version: "10"
+#     postgres-version: "14"
+#     tbls-version: "1.94.5"
+#     local-artifact-path: "_tbls_generated"
+#   secrets: inherit
+#
+# Pass bucket secrets (and GH_TOKEN, if source repository is private) as explicit secrets.
+# ----------------------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      source-repo:
+        description: "Source repository (org/repo)"
+        required: true
+        type: string
+      source-ref:
+        description: "Git ref in source repo (branch / tag / SHA)"
+        required: true
+        type: string
+      database-name:
+        description: "Name of the temporary database (displayed in docs)"
+        required: true
+        type: string
+      migrations-path:
+        description: "Path to migration folder inside source repo"
+        required: true
+        type: string
+      destination-path:
+        description: "Path in the S3 bucket where artifacts are uploaded"
+        required: true
+        type: string
+      flyway-version:
+        description: "flyway/flyway image tag"
+        required: false
+        type: string
+        default: "10"
+      postgres-version:
+        description: "postgres image tag"
+        required: false
+        type: string
+        default: "14"
+      tbls-version:
+        description: "k1low/tbls image tag"
+        required: false
+        type: string
+        default: v1.94.5
+      local-artifact-path:
+        description: "Path to directory where artifacts get generated"
+        required: false
+        type: string
+        default: _tbls_generated
+    secrets:
+      GH_TOKEN:
+        required: false
+      REPORTS_BUCKET_ACCESS_KEY_ID:
+        required: true
+      REPORTS_BUCKET_SECRET_ACCESS_KEY:
+        required: true
+  # mirrors workflow_call inputs
+  workflow_dispatch:
+    inputs:
+      source-repo:
+        description: "Source repository (org/repo)"
+        required: true
+        type: string
+      source-ref:
+        description: "Git ref in source repo (branch / tag / SHA)"
+        required: true
+        type: string
+      database-name:
+        description: "Name of the temporary database (displayed in docs)"
+        required: true
+        type: string
+      migrations-path:
+        description: "Path to migration folder inside source repo"
+        required: true
+        type: string
+      destination-path:
+        description: "Path in the S3 bucket where artifacts are uploaded"
+        required: true
+        type: string
+      flyway-version:
+        description: "flyway/flyway image tag"
+        required: false
+        type: string
+        default: "10"
+      postgres-version:
+        description: "postgres image tag"
+        required: false
+        type: string
+        default: "14"
+      tbls-version:
+        description: "k1low/tbls image tag"
+        required: false
+        type: string
+        default: v1.94.5
+      local-artifact-path:
+        description: "Path to directory where artifacts get generated"
+        required: false
+        type: string
+        default: _tbls_generated
+
+jobs:
+  generate-er-docs:
+    name: "ER docs: ${{ inputs.source-repo }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    # Temporary PostgreSQL database
+    services:
+      postgres:
+        image: postgres:${{ inputs.postgres-version }}
+        env:
+          POSTGRES_DB: ${{ inputs.database-name }}
+          POSTGRES_USER: docuser
+          POSTGRES_PASSWORD: docpass
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      # Check out the source repo's migration files
+      - name: "Checkout ${{ inputs.source-repo }}@${{ inputs.source-ref }}"
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          repository: ${{ inputs.source-repo }}
+          ref: ${{ inputs.source-ref }}
+          token: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # Apply migrations with Flyway
+      - name: Run Flyway migrations
+        env:
+          DATABASE_NAME: ${{ inputs.database-name }}
+          MIGRATIONS_PATH: ${{ inputs.migrations-path }}
+          FLYWAY_VERSION: ${{ inputs.flyway-version }}
+        run: |
+          docker run --rm \
+            --network host \
+            -v "$GITHUB_WORKSPACE/$MIGRATIONS_PATH:/flyway/sql" \
+            -e FLYWAY_URL="jdbc:postgresql://localhost:5432/$DATABASE_NAME" \
+            -e FLYWAY_USER="docuser" \
+            -e FLYWAY_PASSWORD="docpass" \
+            "flyway/flyway:$FLYWAY_VERSION" \
+            migrate
+
+      # Write tbls config pointing at the service container DB
+      # and other minimal configuration such as output path and ER diagram format
+      - name: Write tbls config
+        env:
+          DATABASE_NAME: ${{ inputs.database-name }}
+          LOCAL_ARTIFACT_PATH: ${{ inputs.local-artifact-path }}
+        run: |
+          # Use printf to avoid heredoc indentation issues
+          printf 'dsn: "postgres://docuser:docpass@localhost:5432/%s?sslmode=disable"\n' "$DATABASE_NAME" > .tbls.yml
+          printf 'docPath: %s\n' "$LOCAL_ARTIFACT_PATH" >> .tbls.yml
+          printf 'er:\n  format: mermaid\n' >> .tbls.yml
+
+      # Generate schema documentation with tbls
+      # Mounts the whole workspace so tbls can read .tbls.yml and write
+      # to the output directory.
+      # Output:
+      #   - README.md (index),
+      #   - <schema>.<table>.md per table,
+      #   - schema.json (diff baseline),
+      #   - inline Mermaid ERDs.
+      - name: Run tbls
+        env:
+          TBLS_VERSION: ${{ inputs.tbls-version }}
+        run: |
+          docker run --rm \
+            --network host \
+            -v "$GITHUB_WORKSPACE:/work" \
+            -w /work \
+            "k1low/tbls:$TBLS_VERSION" \
+            doc
+
+      # Publish to ris-reports
+      - name: Publish ER docs to ris-reports
+        uses: digitalservicebund/add-ris-report@3fafb0fb08714549c748eb44ac69d2099c7cbb47
+        with:
+          filePath: ${{ inputs.local-artifact-path }}
+          reportIsDirectory: true
+          destinationDir: ${{ inputs.destination-path }}
+          BUCKET_ACCESS_KEY_ID: ${{ secrets.REPORTS_BUCKET_ACCESS_KEY_ID }}
+          BUCKET_SECRET_ACCESS_KEY: ${{ secrets.REPORTS_BUCKET_SECRET_ACCESS_KEY }}
