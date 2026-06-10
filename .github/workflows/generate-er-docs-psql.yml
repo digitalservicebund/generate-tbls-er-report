@@ -6,14 +6,15 @@ name: Generate and Publish ER Documentation (PostgreSQL)
 #   2. Spins up a throwaway PostgreSQL database (service container)
 #   3. Applies the migrations with Flyway
 #   4. Documents the resulting schema with tbls (Markdown + Mermaid ERD)
-#   5. Publishes the output to ris-reports via digitalservicebund/add-ris-report
+#   5. Uploads the output into an S3 bucket via digitalservicebund/add-ris-report
 #
 # Cross-repo usage (same-org callers with secrets: inherit):
 #   uses: digitalservicebund/tbls-workflows/.github/workflows/generate-er-docs-psql.yml@main
 #   with:
 #     source-repo: digitalservicebund/ris-backend-service
 #     source-ref: 3d0ec38eef7c8536b9d55ebf2de530f5465e5503
-#     database-name: caselaw
+#     database-name: "Caselaw Database"
+#     database-desc: "This database stores caselaw data and also has operative tables (e.g. for shedlock)"
 #     migrations-path: backend/src/main/resources/db-scripts/migration
 #     destination-path: entity-relationship-diagrams-v2/ris-backend-service
 #     flyway-version: "10"
@@ -37,7 +38,11 @@ on:
         required: true
         type: string
       database-name:
-        description: "Name of the temporary database (displayed in docs)"
+        description: "Name of the database (title in docs)"
+        required: true
+        type: string
+      database-desc:
+        description: "Description of the database (shown in docs)"
         required: true
         type: string
       migrations-path:
@@ -68,6 +73,15 @@ on:
         required: false
         type: string
         default: _tbls_generated
+      tbls-config:
+        description: "tbls YAML config string (dsn, name, desc, and docPath are always injected)"
+        required: false
+        type: string
+        default: |
+          format:
+            adjust: true
+          er:
+            format: mermaid
     secrets:
       GH_TOKEN:
         required: false
@@ -75,49 +89,6 @@ on:
         required: true
       REPORTS_BUCKET_SECRET_ACCESS_KEY:
         required: true
-  # mirrors workflow_call inputs
-  workflow_dispatch:
-    inputs:
-      source-repo:
-        description: "Source repository (org/repo)"
-        required: true
-        type: string
-      source-ref:
-        description: "Git ref in source repo (branch / tag / SHA)"
-        required: true
-        type: string
-      database-name:
-        description: "Name of the temporary database (displayed in docs)"
-        required: true
-        type: string
-      migrations-path:
-        description: "Path to migration folder inside source repo"
-        required: true
-        type: string
-      destination-path:
-        description: "Path in the S3 bucket where artifacts are uploaded"
-        required: true
-        type: string
-      flyway-version:
-        description: "flyway/flyway image tag"
-        required: false
-        type: string
-        default: "10"
-      postgres-version:
-        description: "postgres image tag"
-        required: false
-        type: string
-        default: "14"
-      tbls-version:
-        description: "k1low/tbls image tag"
-        required: false
-        type: string
-        default: v1.94.5
-      local-artifact-path:
-        description: "Path to directory where artifacts get generated"
-        required: false
-        type: string
-        default: _tbls_generated
 
 jobs:
   generate-er-docs:
@@ -131,7 +102,7 @@ jobs:
       postgres:
         image: postgres:${{ inputs.postgres-version }}
         env:
-          POSTGRES_DB: ${{ inputs.database-name }}
+          POSTGRES_DB: docdb
           POSTGRES_USER: docuser
           POSTGRES_PASSWORD: docpass
         options: >-
@@ -154,30 +125,33 @@ jobs:
       # Apply migrations with Flyway
       - name: Run Flyway migrations
         env:
-          DATABASE_NAME: ${{ inputs.database-name }}
           MIGRATIONS_PATH: ${{ inputs.migrations-path }}
           FLYWAY_VERSION: ${{ inputs.flyway-version }}
         run: |
           docker run --rm \
             --network host \
             -v "$GITHUB_WORKSPACE/$MIGRATIONS_PATH:/flyway/sql" \
-            -e FLYWAY_URL="jdbc:postgresql://localhost:5432/$DATABASE_NAME" \
+            -e FLYWAY_URL="jdbc:postgresql://localhost:5432/docdb" \
             -e FLYWAY_USER="docuser" \
             -e FLYWAY_PASSWORD="docpass" \
             "flyway/flyway:$FLYWAY_VERSION" \
             migrate
 
-      # Write tbls config pointing at the service container DB
-      # and other minimal configuration such as output path and ER diagram format
+      # Write tbls config pointing at the service container DB.
+      # Starts from the provided (or default) tbls-config string, then
+      # injects dsn, docPath, and optionally name/desc on top.
       - name: Write tbls config
         env:
+          TBLS_CONFIG: ${{ inputs.tbls-config }}
           DATABASE_NAME: ${{ inputs.database-name }}
+          DATABASE_DESC: ${{ inputs.database-desc }}
           LOCAL_ARTIFACT_PATH: ${{ inputs.local-artifact-path }}
+          DSN: "postgres://docuser:docpass@localhost:5432/docdb?sslmode=disable"
         run: |
-          # Use printf to avoid heredoc indentation issues
-          printf 'dsn: "postgres://docuser:docpass@localhost:5432/%s?sslmode=disable"\n' "$DATABASE_NAME" > .tbls.yml
-          printf 'docPath: %s\n' "$LOCAL_ARTIFACT_PATH" >> .tbls.yml
-          printf 'er:\n  format: mermaid\n' >> .tbls.yml
+          echo "$TBLS_CONFIG" > .tbls.yml
+          yq eval -i '.dsn = strenv(DSN) | .docPath = strenv(LOCAL_ARTIFACT_PATH)' .tbls.yml
+          [ -n "$DATABASE_NAME" ] && yq eval -i '.name = strenv(DATABASE_NAME)' .tbls.yml
+          [ -n "$DATABASE_DESC" ] && yq eval -i '.desc = strenv(DATABASE_DESC)' .tbls.yml
 
       # Generate schema documentation with tbls
       # Mounts the whole workspace so tbls can read .tbls.yml and write
