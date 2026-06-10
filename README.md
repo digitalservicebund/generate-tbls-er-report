@@ -24,20 +24,40 @@ jobs:
   er-docs:
     uses: digitalservicebund/tbls-workflows/.github/workflows/generate-er-docs-psql.yml@main
     with:
+      # Required arguments:
       source-repo: digitalservicebund/ris-backend-service
-      source-ref: 3d0ec38eef7c8536b9d55ebf2de530f5465e5503
-      database-name: caselaw
-      migrations-path: backend/src/main/resources/db-scripts/migration
-      destination-path: entity-relationship-diagrams-v2/ris-backend-service
+      source-ref: 3d0ec38eef7c8536b9d55ebf2de530f5465e5503 # SHA, branch name, or tag
+      database-name: "Caselaw Database"
+      database-desc: "This database stores caselaw data and also has operative tables (e.g. for shedlock)."
+      migrations-path: backend/src/main/resources/db-scripts/migration # Path to the migration scripts
+      destination-path: entity-relationship-diagrams-v2/ris-backend-service # S3 Bucket
+      # Optional, defaults can be overridden:
       flyway-version: "10"
       postgres-version: "14"
       tbls-version: "1.94.5"
+      # tbls YAML config string (dsn, name, desc, and docPath are always injected)
+      tbls-config: |
+          format:
+            adjust: true
+          er:
+            format: mermaid
       local-artifact-path: "_tbls_generated"
     secrets: inherit
 ```
 
 The `paths:` filter ensures the job only runs when migration files actually change.
 `secrets: inherit` forwards the calling repo's secrets automatically - no extra configuration needed as long as both repos are public.
+
+### `local-artifact-path`
+
+The workflow generates tbls output into a directory at the workspace root. The default is `_tbls_generated`. The entire contents of this directory are uploaded to the S3 bucket.
+
+Change this if `_tbls_generated` is already used by something else in the source repo:
+
+```yaml
+    with:
+      local-artifact-path: _tbls_er_output
+```
 
 ### Secrets reference
 

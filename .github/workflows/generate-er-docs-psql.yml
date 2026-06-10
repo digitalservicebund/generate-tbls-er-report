@@ -14,12 +14,17 @@ name: Generate and Publish ER Documentation (PostgreSQL)
 #     source-repo: digitalservicebund/ris-backend-service
 #     source-ref: 3d0ec38eef7c8536b9d55ebf2de530f5465e5503
 #     database-name: "Caselaw Database"
-#     database-desc: "This database stores caselaw data and also has operative tables (e.g. for shedlock)"
+#     database-desc: "This database stores caselaw data and also has operative tables (e.g. for shedlock)´."
 #     migrations-path: backend/src/main/resources/db-scripts/migration
 #     destination-path: entity-relationship-diagrams-v2/ris-backend-service
 #     flyway-version: "10"
 #     postgres-version: "14"
 #     tbls-version: "1.94.5"
+#     tbls-config: |
+#         format:
+#           adjust: true
+#         er:
+#           format: mermaid
 #     local-artifact-path: "_tbls_generated"
 #   secrets: inherit
 #
@@ -68,11 +73,6 @@ on:
         required: false
         type: string
         default: v1.94.5
-      local-artifact-path:
-        description: "Path to directory where artifacts get generated"
-        required: false
-        type: string
-        default: _tbls_generated
       tbls-config:
         description: "tbls YAML config string (dsn, name, desc, and docPath are always injected)"
         required: false
@@ -82,6 +82,11 @@ on:
             adjust: true
           er:
             format: mermaid
+      local-artifact-path:
+        description: "Path to directory where artifacts get generated"
+        required: false
+        type: string
+        default: _tbls_generated
     secrets:
       GH_TOKEN:
         required: false
