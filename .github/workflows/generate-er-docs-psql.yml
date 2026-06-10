@@ -74,7 +74,7 @@ on:
         type: string
         default: v1.94.5
       tbls-config:
-        description: "tbls YAML config string (dsn, name, desc, and docPath are always injected)"
+        description: "tbls YAML config string; dsn and docPath are injected automatically, name and desc are set from the database-name and database-desc inputs"
         required: false
         type: string
         default: |
@@ -154,9 +154,12 @@ jobs:
           DSN: "postgres://docuser:docpass@localhost:5432/docdb?sslmode=disable"
         run: |
           echo "$TBLS_CONFIG" > .tbls.yml
-          yq eval -i '.dsn = strenv(DSN) | .docPath = strenv(LOCAL_ARTIFACT_PATH)' .tbls.yml
-          [ -n "$DATABASE_NAME" ] && yq eval -i '.name = strenv(DATABASE_NAME)' .tbls.yml
-          [ -n "$DATABASE_DESC" ] && yq eval -i '.desc = strenv(DATABASE_DESC)' .tbls.yml
+          yq eval -i '
+            .dsn = strenv(DSN) |
+            .docPath = strenv(LOCAL_ARTIFACT_PATH) |
+            .name = strenv(DATABASE_NAME) |
+            .desc = strenv(DATABASE_DESC)
+          ' .tbls.yml
 
       # Generate schema documentation with tbls
       # Mounts the whole workspace so tbls can read .tbls.yml and write
