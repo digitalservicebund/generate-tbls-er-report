@@ -87,6 +87,10 @@ on:
         required: false
         type: string
         default: _tbls_generated
+      slack-channel-id:
+        description: "Slack channel used for failure notification. Needs SLACK_BOT_TOKEN passed as secret."
+        required: false
+        type: string
     secrets:
       GH_TOKEN:
         required: false
@@ -94,6 +98,8 @@ on:
         required: true
       REPORTS_BUCKET_SECRET_ACCESS_KEY:
         required: true
+      SLACK_BOT_TOKEN:
+        required: false
 
 jobs:
   generate-er-docs:
@@ -189,3 +195,10 @@ jobs:
           destinationDir: ${{ inputs.destination-path }}
           BUCKET_ACCESS_KEY_ID: ${{ secrets.REPORTS_BUCKET_ACCESS_KEY_ID }}
           BUCKET_SECRET_ACCESS_KEY: ${{ secrets.REPORTS_BUCKET_SECRET_ACCESS_KEY }}
+
+      - name: Send failure to Slack
+        uses: digitalservicebund/notify-on-failure-gha@671832f192aee0a068fd92b2f6deb975df794a84 #v1.6.1
+        if: ${{ failure() && github.ref == 'refs/heads/main' && inputs.slack-channel-id != '' }}
+        with:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ inputs.slack-channel-id }}

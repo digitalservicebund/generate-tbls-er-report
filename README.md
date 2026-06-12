@@ -79,6 +79,19 @@ They must always be present - the publish step fails without them.
       REPORTS_BUCKET_SECRET_ACCESS_KEY: ${{ secrets.REPORTS_BUCKET_SECRET_ACCESS_KEY }}
 ```
 
+#### `SLACK_BOT_TOKEN` (optional)
+
+Used to connect to Slack when sending a notification on failure.
+Failure notification is attempted when failure occurs and the parameter `slack-channel-id` is provided.
+
+```yaml
+    with:
+      ...
+      slack-channel-id: ${{ vars.SLACK_CHANNEL_ID }}
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+```
+
 #### `GH_TOKEN` (optional)
 
 Used to check out the source repository's migration files.
