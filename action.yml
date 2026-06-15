@@ -1,0 +1,251 @@
+name: Generate tbls ER Report (PostgreSQL)
+description: >
+  Checks out Flyway/SQL migration files from a configurable source repo,
+  applies them against a throwaway PostgreSQL database running in an isolated
+  Docker network (no outbound internet), documents the resulting schema with
+  tbls (Markdown + Mermaid ERD), and uploads the output to an S3 bucket via
+  digitalservicebund/add-ris-report.
+
+# -----------------------------------------------------------------------------------------
+# Usage (step-level, inside any job with runs-on: ubuntu-latest):
+#
+#   - uses: digitalservicebund/generate-tbls-er-report@<SHA>
+#     with:
+#       source-repo: digitalservicebund/ris-backend-service
+#       source-ref: 3d0ec38eef7c8536b9d55ebf2de530f5465e5503  # prefer a SHA
+#       database-name: "Caselaw Database"
+#       database-desc: "Stores caselaw data."
+#       migrations-path: backend/src/main/resources/db-scripts/migration
+#       destination-path: entity-relationship-diagrams-v2/ris-backend-service
+#       bucket-access-key-id: ${{ secrets.REPORTS_BUCKET_ACCESS_KEY_ID }}
+#       bucket-secret-access-key: ${{ secrets.REPORTS_BUCKET_SECRET_ACCESS_KEY }}
+#       # Optional:
+#       gh-token: ${{ secrets.GH_TOKEN }}          # only needed for private source repos
+#       slack-channel-id: ${{ vars.SLACK_CHANNEL_ID }}
+#       slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+# -----------------------------------------------------------------------------------------
+
+inputs:
+  # ── Required ──────────────────────────────────────────────────────────────────────────
+  source-repo:
+    description: "Source repository containing migration files (org/repo)"
+    required: true
+  source-ref:
+    description: "Git ref in source repo to check out (branch / tag / SHA — prefer a SHA)"
+    required: true
+  database-name:
+    description: "Name of the database (used as title in generated docs)"
+    required: true
+  database-desc:
+    description: "Description of the database (shown in generated docs)"
+    required: true
+  migrations-path:
+    description: "Path to the Flyway migration folder inside the source repo"
+    required: true
+  destination-path:
+    description: "Destination path in the S3 bucket where artifacts are uploaded"
+    required: true
+  bucket-access-key-id:
+    description: "S3 bucket access key ID. Required when skip-publish is false."
+    required: false
+    default: ""
+  bucket-secret-access-key:
+    description: "S3 bucket secret access key. Required when skip-publish is false."
+    required: false
+    default: ""
+
+  # ── Optional ──────────────────────────────────────────────────────────────────────────
+  skip-publish:
+    description: "Set to 'true' to skip uploading artifacts to S3 (useful for testing)."
+    required: false
+    default: "false"
+  flyway-version:
+    description: "flyway/flyway Docker image tag"
+    required: false
+    default: "10"
+  postgres-version:
+    description: "postgres Docker image tag"
+    required: false
+    default: "14"
+  tbls-version:
+    description: "k1low/tbls Docker image tag"
+    required: false
+    default: "v1.94.5"
+  tbls-config:
+    description: >
+      tbls YAML config string. dsn, docPath, name, and desc are always
+      injected automatically and will override any values provided here.
+    required: false
+    default: |
+      format:
+        adjust: true
+      er:
+        format: mermaid
+  local-artifact-path:
+    description: "Directory (relative to the source repo root) where tbls writes its output"
+    required: false
+    default: "_tbls_generated"
+  gh-token:
+    description: "GitHub token for checking out private source repos. Defaults to GITHUB_TOKEN."
+    required: false
+    default: ""
+  slack-channel-id:
+    description: "Slack channel ID for failure notifications. Requires slack-bot-token."
+    required: false
+    default: ""
+  slack-bot-token:
+    description: "Slack bot token used for failure notifications."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # Mask sensitive inputs so they are redacted in all subsequent log output.
+    # GitHub only auto-masks secrets.*; composite action inputs are plain strings
+    # and will appear in logs unless explicitly added to the mask.
+    - name: Mask sensitive inputs
+      shell: bash
+      env:
+        BUCKET_ACCESS_KEY_ID: ${{ inputs.bucket-access-key-id }}
+        BUCKET_SECRET_ACCESS_KEY: ${{ inputs.bucket-secret-access-key }}
+        GH_TOKEN: ${{ inputs.gh-token }}
+        SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
+      run: |
+        echo "::add-mask::$BUCKET_ACCESS_KEY_ID"
+        echo "::add-mask::$BUCKET_SECRET_ACCESS_KEY"
+        echo "::add-mask::$GH_TOKEN"
+        echo "::add-mask::$SLACK_BOT_TOKEN"
+        # Export to GITHUB_ENV so subsequent steps can use ${{ env.* }}
+        # instead of ${{ inputs.* }}, keeping secrets out of expression evaluation.
+        echo "BUCKET_ACCESS_KEY_ID=$BUCKET_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+        echo "BUCKET_SECRET_ACCESS_KEY=$BUCKET_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
+        echo "SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN" >> "$GITHUB_ENV"
+
+    # Check out migration files from the source repo
+    # Checked out into _source/ so this step never clobbers the caller's workspace.
+    - name: "Checkout ${{ inputs.source-repo }}@${{ inputs.source-ref }}"
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      with:
+        repository: ${{ inputs.source-repo }}
+        ref: ${{ inputs.source-ref }}
+        token: ${{ inputs.gh-token || github.token }}
+        path: _source
+
+    # Create an isolated Docker network
+    # --internal: Docker adds no default gateway. Containers on this network can
+    # reach each other but cannot make outbound connections to the internet.
+    # This prevents malicious SQL (COPY FROM PROGRAM, etc.) from exfiltrating data.
+    - name: Create isolated Docker network
+      shell: bash
+      run: docker network create --internal er-docs-net
+
+    # Start PostgreSQL inside the isolated network
+    - name: Start PostgreSQL
+      shell: bash
+      env:
+        POSTGRES_VERSION: ${{ inputs.postgres-version }}
+      run: |
+        docker run -d \
+          --name postgres-er-docs \
+          --network er-docs-net \
+          -e POSTGRES_DB=docdb \
+          -e POSTGRES_USER=docuser \
+          -e POSTGRES_PASSWORD=docpass \
+          "postgres:$POSTGRES_VERSION"
+
+    # Wait for PostgreSQL to be ready
+    - name: Wait for PostgreSQL
+      shell: bash
+      run: |
+        echo "Waiting for PostgreSQL to be ready..."
+        for i in $(seq 1 30); do
+          if docker exec postgres-er-docs pg_isready -U docuser -d docdb; then
+            echo "PostgreSQL is ready."
+            break
+          fi
+          sleep 2
+        done
+
+    # Write tbls config
+    # Writes the caller-supplied (or default) tbls-config, then unconditionally
+    # injects dsn, docPath, name, and desc so these cannot be overridden via config.
+    - name: Write tbls config
+      shell: bash
+      env:
+        TBLS_CONFIG: ${{ inputs.tbls-config }}
+        DATABASE_NAME: ${{ inputs.database-name }}
+        DATABASE_DESC: ${{ inputs.database-desc }}
+        LOCAL_ARTIFACT_PATH: ${{ inputs.local-artifact-path }}
+        DSN: "postgres://docuser:docpass@postgres-er-docs:5432/docdb?sslmode=disable"
+      run: |
+        echo "$TBLS_CONFIG" > "$GITHUB_WORKSPACE/_source/.tbls.yml"
+        yq eval -i '
+          .dsn = strenv(DSN) |
+          .docPath = strenv(LOCAL_ARTIFACT_PATH) |
+          .name = strenv(DATABASE_NAME) |
+          .desc = strenv(DATABASE_DESC)
+        ' "$GITHUB_WORKSPACE/_source/.tbls.yml"
+
+    # Apply Flyway migrations
+    - name: Run Flyway migrations
+      shell: bash
+      env:
+        MIGRATIONS_PATH: ${{ inputs.migrations-path }}
+        FLYWAY_VERSION: ${{ inputs.flyway-version }}
+      run: |
+        docker run --rm \
+          --network er-docs-net \
+          -v "$GITHUB_WORKSPACE/_source/$MIGRATIONS_PATH:/flyway/sql" \
+          -e FLYWAY_URL="jdbc:postgresql://postgres-er-docs:5432/docdb" \
+          -e FLYWAY_USER="docuser" \
+          -e FLYWAY_PASSWORD="docpass" \
+          "flyway/flyway:$FLYWAY_VERSION" \
+          migrate
+
+    # 7. Generate schema documentation with tbls
+    # Mounts the source checkout so tbls can read .tbls.yml and write output.
+    # Runs on the isolated network to reach the database.
+    # Output:
+    #   - README.md (index)
+    #   - <schema>.<table>.md per table
+    #   - schema.json (diff baseline)
+    #   - inline Mermaid ERDs
+    - name: Run tbls
+      shell: bash
+      env:
+        TBLS_VERSION: ${{ inputs.tbls-version }}
+      run: |
+        docker run --rm \
+          --network er-docs-net \
+          -v "$GITHUB_WORKSPACE/_source:/work" \
+          -w /work \
+          "k1low/tbls:$TBLS_VERSION" \
+          doc
+
+    # Publish ER docs to S3
+    - name: Publish ER docs
+      if: ${{ inputs.skip-publish != 'true' }}
+      uses: digitalservicebund/add-ris-report@3fafb0fb08714549c748eb44ac69d2099c7cbb47
+      with:
+        filePath: _source/${{ inputs.local-artifact-path }}
+        reportIsDirectory: true
+        destinationDir: ${{ inputs.destination-path }}
+        BUCKET_ACCESS_KEY_ID: ${{ env.BUCKET_ACCESS_KEY_ID }}
+        BUCKET_SECRET_ACCESS_KEY: ${{ env.BUCKET_SECRET_ACCESS_KEY }}
+
+    # Notify Slack on failure, if information is provided
+    - name: Send failure to Slack
+      uses: digitalservicebund/notify-on-failure-gha@671832f192aee0a068fd92b2f6deb975df794a84 # v1.6.1
+      if: ${{ failure() && github.ref == 'refs/heads/main' && inputs.slack-channel-id != '' }}
+      with:
+        SLACK_BOT_TOKEN: ${{ env.SLACK_BOT_TOKEN }}
+        SLACK_CHANNEL_ID: ${{ inputs.slack-channel-id }}
+
+    # Cleanup (always runs)
+    - name: Cleanup Docker resources
+      if: always()
+      shell: bash
+      run: |
+        docker rm -f postgres-er-docs || true
+        docker network rm er-docs-net || true

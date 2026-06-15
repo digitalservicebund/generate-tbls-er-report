@@ -1,15 +1,14 @@
-# Reusable Workflows with tbls
-Contains workflows utilizing [tbls](https://github.com/k1Low/tbls) for database documentation and quality assurance with easy CI integration.
+# Generate Entity Relationship Report with TBLS
+
+Contains a [GitHub composite action](https://docs.github.com/en/actions/sharing-automations/creating-actions/creating-a-composite-action) that use [tbls](https://github.com/k1Low/tbls) for database documentation and quality assurance with easy CI integration.
 
 ## ER Schema Documentation
 
-Entity-relationship documentation is generated from Flyway migration files and stored via [add-ris-report](https://github.com/digitalservicebund/add-ris-report).
+Entity-relationship documentation is generated from Flyway migration files and stored via [add-ris-report](https://github.com/digitalservicebund/add-ris-report). The migration is applied on a isolated PostgreSQL Docker container with no outbound internet connection.
 
-For different database engines, there are different workflows.
+### Usage (step level)
 
-### Trigger from another repo's workflow
-
-Any repo can call this workflow automatically, e.g. on every push to `main`:
+Add the action as a **step** inside any job that runs on `ubuntu-latest`:
 
 ```yaml
 name: Update ER Documentation
@@ -22,91 +21,121 @@ on:
 
 jobs:
   er-docs:
-    uses: digitalservicebund/tbls-workflows/.github/workflows/generate-er-docs-psql.yml@main
-    with:
-      # Required arguments:
-      source-repo: digitalservicebund/ris-backend-service
-      source-ref: 3d0ec38eef7c8536b9d55ebf2de530f5465e5503 # SHA, branch name, or tag
-      database-name: "Caselaw Database"
-      database-desc: "This database stores caselaw data and also has operative tables (e.g. for shedlock)."
-      migrations-path: backend/src/main/resources/db-scripts/migration # Path to the migration scripts
-      destination-path: entity-relationship-diagrams-v2/ris-backend-service # S3 Bucket
-      # Optional, defaults can be overridden:
-      flyway-version: "10"
-      postgres-version: "14"
-      tbls-version: "1.94.5"
-      # tbls YAML config string (dsn, name, desc, and docPath are always injected)
-      tbls-config: |
-          format:
-            adjust: true
-          er:
-            format: mermaid
-      local-artifact-path: "_tbls_generated"
-    secrets: inherit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: digitalservicebund/generate-tbls-er-report@<SHA>
+        with:
+          # Required:
+          source-repo: digitalservicebund/ris-backend-service
+          source-ref: 3d0ec38eef7c8536b9d55ebf2de530f5465e5503  # prefer a SHA
+          database-name: "Caselaw Database"
+          database-desc: "Stores caselaw data."
+          migrations-path: backend/src/main/resources/db-scripts/migration
+          destination-path: entity-relationship-diagrams-v2/ris-backend-service
+          bucket-access-key-id: ${{ secrets.REPORTS_BUCKET_ACCESS_KEY_ID }}
+          bucket-secret-access-key: ${{ secrets.REPORTS_BUCKET_SECRET_ACCESS_KEY }}
+          # Optional - override defaults or enable Slack notifications:
+          flyway-version: "10"
+          postgres-version: "14"
+          tbls-version: "v1.94.5"
+          tbls-config: |
+            format:
+              adjust: true
+            er:
+              format: mermaid
+          local-artifact-path: "_tbls_generated"
+          gh-token: ${{ secrets.GH_TOKEN }}
+          slack-channel-id: ${{ vars.SLACK_CHANNEL_ID }}
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
 ```
 
 The `paths:` filter ensures the job only runs when migration files actually change.
-`secrets: inherit` forwards the calling repo's secrets automatically - no extra configuration needed as long as both repos are public.
 
-### `local-artifact-path`
+> **Pin to a SHA** - unlike reusable workflows, composite actions do not support `@main` safely in production. Pin to a full commit SHA and update deliberately.
 
-The workflow generates tbls output into a directory at the workspace root. The default is `_tbls_generated`. The entire contents of this directory are uploaded to the S3 bucket.
+### Inputs reference
 
-Change this if `_tbls_generated` is already used by something else in the source repo:
+#### Required
 
-```yaml
-    with:
-      local-artifact-path: _tbls_er_output
-```
+| Input | Description |
+|---|---|
+| `source-repo` | Source repository containing migration files (`org/repo`) |
+| `source-ref` | Git ref to check out in the source repo (branch / tag / SHA - prefer a SHA) |
+| `database-name` | Name of the database (used as title in generated docs) |
+| `database-desc` | Description of the database (shown in generated docs) |
+| `migrations-path` | Path to the Flyway migration folder inside the source repo |
+| `destination-path` | Destination path in the S3 bucket where artifacts are uploaded |
+| `bucket-access-key-id` | S3 bucket access key ID |
+| `bucket-secret-access-key` | S3 bucket secret access key |
 
-### Secrets reference
+#### Optional
 
-The workflow requires two secrets for publishing and accepts one optional secret for private source repos.
+| Input | Default | Description |
+|---|---|---|
+| `flyway-version` | `10` | `flyway/flyway` Docker image tag |
+| `postgres-version` | `14` | `postgres` Docker image tag |
+| `tbls-version` | `v1.94.5` | `k1low/tbls` Docker image tag |
+| `tbls-config` | mermaid ERD config (see below) | tbls YAML config string. `dsn`, `docPath`, `name`, and `desc` are always injected automatically. |
+| `local-artifact-path` | `_tbls_generated` | Directory (relative to the source repo root) where tbls writes its output |
+| `gh-token` | `""` (uses `GITHUB_TOKEN`) | GitHub token for checking out private source repos |
+| `slack-channel-id` | `""` | Slack channel ID for failure notifications. Requires `slack-bot-token`. |
+| `slack-bot-token` | `""` | Slack bot token used for failure notifications. |
 
-#### `REPORTS_BUCKET_ACCESS_KEY_ID` and `REPORTS_BUCKET_SECRET_ACCESS_KEY` (required)
+### Credentials
+
+Unlike reusable workflows, composite actions do not support a `secrets:` block. All credentials are passed as `with:` inputs.
+
+#### `bucket-access-key-id` and `bucket-secret-access-key` (required)
 
 These credentials authorize uploads to the S3 bucket behind [add-ris-report](https://github.com/digitalservicebund/add-ris-report).
-They must always be present - the publish step fails without them.
-
-**How to pass them:**
-
-- If the calling repo already has these secrets set (e.g. inherited from the organisation), use `secrets: inherit` and nothing else needs to be done.
-- If not, pass them explicitly:
 
 ```yaml
-    secrets:
-      REPORTS_BUCKET_ACCESS_KEY_ID: ${{ secrets.REPORTS_BUCKET_ACCESS_KEY_ID }}
-      REPORTS_BUCKET_SECRET_ACCESS_KEY: ${{ secrets.REPORTS_BUCKET_SECRET_ACCESS_KEY }}
+        with:
+          bucket-access-key-id: ${{ secrets.REPORTS_BUCKET_ACCESS_KEY_ID }}
+          bucket-secret-access-key: ${{ secrets.REPORTS_BUCKET_SECRET_ACCESS_KEY }}
 ```
 
-#### `SLACK_BOT_TOKEN` (optional)
-
-Used to connect to Slack when sending a notification on failure.
-Failure notification is attempted when failure occurs and the parameter `slack-channel-id` is provided.
-
-```yaml
-    with:
-      ...
-      slack-channel-id: ${{ vars.SLACK_CHANNEL_ID }}
-    secrets:
-      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-```
-
-#### `GH_TOKEN` (optional)
+#### `gh-token` (optional)
 
 Used to check out the source repository's migration files.
 
 | Situation | What to do |
 |---|---|
-| Source repo is **public** | Omit `GH_TOKEN` - the built-in `GITHUB_TOKEN` is used automatically |
-| Source repo is **private** | Create a PAT with `repo` scope, store it as a secret named `GH_TOKEN` in the calling repo, then pass it via `secrets: inherit` or explicitly: `GH_TOKEN: ${{ secrets.GH_TOKEN }}` |
-
-#### Passing all secrets at once
-
-The simplest approach when the calling repo is in the same organisation and already holds all required secrets:
+| Source repo is **public** | Omit `gh-token` - the built-in `GITHUB_TOKEN` is used automatically |
+| Source repo is **private** | Create a PAT with `repo` scope, store it as a secret, and pass it via `gh-token` |
 
 ```yaml
-    secrets: inherit
+          gh-token: ${{ secrets.GH_TOKEN }}
 ```
 
-Use explicit secret mapping instead when you want to be precise about which secrets are forwarded, or when secret names differ between repos.
+#### `slack-bot-token` and `slack-channel-id` (optional)
+
+Enables a Slack failure notification when a run fails on the default branch. Both inputs must be set together.
+
+```yaml
+          slack-channel-id: ${{ vars.SLACK_CHANNEL_ID }}
+          slack-bot-token: ${{ secrets.SLACK_BOT_TOKEN }}
+```
+
+### `local-artifact-path`
+
+The action generates tbls output into a directory inside the checked-out source repo. The default is `_tbls_generated`. The entire contents of this directory are uploaded to the S3 bucket.
+
+Change this if `_tbls_generated` conflicts with something in the source repo:
+
+```yaml
+          local-artifact-path: _tbls_er_output
+```
+
+### `tbls-config`
+
+The default config produces Mermaid ERDs with auto-adjusted layout:
+
+```yaml
+format:
+  adjust: true
+er:
+  format: mermaid
+```
+
+You can supply any valid [tbls configuration](https://github.com/k1low/tbls?tab=readme-ov-file#configuration) as a YAML string. The fields `dsn`, `docPath`, `name`, and `desc` are always injected automatically and will override any values you provide for them.
