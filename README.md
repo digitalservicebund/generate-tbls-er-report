@@ -22,7 +22,7 @@ on:
 
 jobs:
   er-docs:
-    uses: digitalservicebund/tbls-workflows/.github/workflows/generate-er-docs-psql.yml@main
+    uses: digitalservicebund/tbls-workflows/generate-er-docs-psql.yml@<SHA>
     with:
       # Required arguments:
       source-repo: digitalservicebund/ris-backend-service
