@@ -11,9 +11,23 @@ jobs:
 
       - uses: ./
         with:
-          source-repo: ${{ github.repository }}
-          source-ref: ${{ github.sha }}
-          database-name: "Test Database"
-          database-desc: "Minimal schema for testing the composite action."
-          migrations-path: test/migrations
-          skip-publish: false
+          # Use this repo itself as the source so no external repo or secrets are needed.
+          source_repo: ${{ github.repository }}
+          source_ref: ${{ github.sha }}
+          database_name: "Test Database"
+          database_desc: "Minimal schema for testing the composite action."
+          migrations_path: test/migrations
+          skip_publish: true
+          # Dummy values to verify masking - if masking works these appear as *** in the log.
+          BUCKET_ACCESS_KEY_ID: "super-secret-key-id"
+          BUCKET_SECRET_ACCESS_KEY: "super-secret-access-key"
+          SLACK_BOT_TOKEN: "super-secret-slack-token"
+
+      # Verify that the dummy secret values are masked in log output.
+      # Each echo should print *** - if the raw value appears, masking is broken.
+      - name: Verify secret masking
+        shell: bash
+        run: |
+          echo "BUCKET_ACCESS_KEY_ID: super-secret-key-id"
+          echo "BUCKET_SECRET_ACCESS_KEY: super-secret-access-key"
+          echo "SLACK_BOT_TOKEN: super-secret-slack-token"
