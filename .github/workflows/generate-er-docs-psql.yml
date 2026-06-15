@@ -9,7 +9,7 @@ name: Generate and Publish ER Documentation (PostgreSQL)
 #   5. Uploads the output into an S3 bucket via digitalservicebund/add-ris-report
 #
 # Cross-repo usage (same-org callers with secrets: inherit):
-#   uses: digitalservicebund/tbls-workflows/generate-er-docs-psql.yml@<SHA>
+#   uses: digitalservicebund/tbls-workflows/.github/workflows/generate-er-docs-psql.yml@main
 #   with:
 #     source-repo: digitalservicebund/ris-backend-service
 #     source-ref: 3d0ec38eef7c8536b9d55ebf2de530f5465e5503
