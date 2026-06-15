@@ -16,4 +16,4 @@ jobs:
           database-name: "Test Database"
           database-desc: "Minimal schema for testing the composite action."
           migrations-path: test/migrations
-          skip-publish: false
+          skip-publish: true
