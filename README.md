@@ -64,14 +64,15 @@ The `paths:` filter ensures the job only runs when migration files actually chan
 | `database-name` | Name of the database (used as title in generated docs) |
 | `database-desc` | Description of the database (shown in generated docs) |
 | `migrations-path` | Path to the Flyway migration folder inside the source repo |
-| `destination-path` | Destination path in the S3 bucket where artifacts are uploaded |
-| `bucket-access-key-id` | S3 bucket access key ID |
-| `bucket-secret-access-key` | S3 bucket secret access key |
+| `destination-path` | Destination path in the S3 bucket where artifacts are uploaded. Not used when `skip-publish` is `true`. |
 
 #### Optional
 
 | Input | Default | Description |
 |---|---|---|
+| `skip-publish` | `false` | Set to `true` to skip the S3 upload step. When set, `bucket-access-key-id` and `bucket-secret-access-key` are not required. |
+| `bucket-access-key-id` | `""` | S3 bucket access key ID. Required when `skip-publish` is `false`. |
+| `bucket-secret-access-key` | `""` | S3 bucket secret access key. Required when `skip-publish` is `false`. |
 | `flyway-version` | `10` | `flyway/flyway` Docker image tag |
 | `postgres-version` | `14` | `postgres` Docker image tag |
 | `tbls-version` | `v1.94.5` | `k1low/tbls` Docker image tag |
@@ -93,6 +94,12 @@ These credentials authorize uploads to the S3 bucket behind [add-ris-report](htt
         with:
           bucket-access-key-id: ${{ secrets.REPORTS_BUCKET_ACCESS_KEY_ID }}
           bucket-secret-access-key: ${{ secrets.REPORTS_BUCKET_SECRET_ACCESS_KEY }}
+```
+
+You can disable the S3 upload, removing the necessity to provide the credentials:
+```yaml
+        with:
+          skip-publish: true
 ```
 
 #### `gh-token` (optional)
