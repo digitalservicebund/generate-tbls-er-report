@@ -9,7 +9,7 @@ description: >
 # -----------------------------------------------------------------------------------------
 # Usage (step-level, inside any job with runs-on: ubuntu-latest):
 #
-#   - uses: digitalservicebund/generate-tbls-er-report-psql@<SHA>
+#   - uses: digitalservicebund/generate-tbls-er-report@<SHA>
 #     with:
 #       source-repo: digitalservicebund/ris-backend-service
 #       source-ref: 3d0ec38eef7c8536b9d55ebf2de530f5465e5503  # prefer a SHA
@@ -46,13 +46,19 @@ inputs:
     description: "Destination path in the S3 bucket where artifacts are uploaded"
     required: true
   bucket-access-key-id:
-    description: "S3 bucket access key ID (replaces REPORTS_BUCKET_ACCESS_KEY_ID secret)"
-    required: true
+    description: "S3 bucket access key ID. Required when skip-publish is false."
+    required: false
+    default: ""
   bucket-secret-access-key:
-    description: "S3 bucket secret access key (replaces REPORTS_BUCKET_SECRET_ACCESS_KEY secret)"
-    required: true
+    description: "S3 bucket secret access key. Required when skip-publish is false."
+    required: false
+    default: ""
 
   # ── Optional ──────────────────────────────────────────────────────────────────────────
+  skip-publish:
+    description: "Set to 'true' to skip uploading artifacts to S3 (useful for testing)."
+    required: false
+    default: "false"
   flyway-version:
     description: "flyway/flyway Docker image tag"
     required: false
@@ -95,6 +101,27 @@ inputs:
 runs:
   using: composite
   steps:
+    # Mask sensitive inputs so they are redacted in all subsequent log output.
+    # GitHub only auto-masks secrets.*; composite action inputs are plain strings
+    # and will appear in logs unless explicitly added to the mask.
+    - name: Mask sensitive inputs
+      shell: bash
+      env:
+        BUCKET_ACCESS_KEY_ID: ${{ inputs.bucket-access-key-id }}
+        BUCKET_SECRET_ACCESS_KEY: ${{ inputs.bucket-secret-access-key }}
+        GH_TOKEN: ${{ inputs.gh-token }}
+        SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
+      run: |
+        echo "::add-mask::$BUCKET_ACCESS_KEY_ID"
+        echo "::add-mask::$BUCKET_SECRET_ACCESS_KEY"
+        echo "::add-mask::$GH_TOKEN"
+        echo "::add-mask::$SLACK_BOT_TOKEN"
+        # Export to GITHUB_ENV so subsequent steps can use ${{ env.* }}
+        # instead of ${{ inputs.* }}, keeping secrets out of expression evaluation.
+        echo "BUCKET_ACCESS_KEY_ID=$BUCKET_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+        echo "BUCKET_SECRET_ACCESS_KEY=$BUCKET_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
+        echo "SLACK_BOT_TOKEN=$SLACK_BOT_TOKEN" >> "$GITHUB_ENV"
+
     # Check out migration files from the source repo
     # Checked out into _source/ so this step never clobbers the caller's workspace.
     - name: "Checkout ${{ inputs.source-repo }}@${{ inputs.source-ref }}"
@@ -198,20 +225,21 @@ runs:
 
     # Publish ER docs to S3
     - name: Publish ER docs
+      if: ${{ inputs.skip-publish != 'true' }}
       uses: digitalservicebund/add-ris-report@3fafb0fb08714549c748eb44ac69d2099c7cbb47
       with:
         filePath: _source/${{ inputs.local-artifact-path }}
         reportIsDirectory: true
         destinationDir: ${{ inputs.destination-path }}
-        BUCKET_ACCESS_KEY_ID: ${{ inputs.bucket-access-key-id }}
-        BUCKET_SECRET_ACCESS_KEY: ${{ inputs.bucket-secret-access-key }}
+        BUCKET_ACCESS_KEY_ID: ${{ env.BUCKET_ACCESS_KEY_ID }}
+        BUCKET_SECRET_ACCESS_KEY: ${{ env.BUCKET_SECRET_ACCESS_KEY }}
 
     # Notify Slack on failure, if information is provided
     - name: Send failure to Slack
       uses: digitalservicebund/notify-on-failure-gha@671832f192aee0a068fd92b2f6deb975df794a84 # v1.6.1
       if: ${{ failure() && github.ref == 'refs/heads/main' && inputs.slack-channel-id != '' }}
       with:
-        SLACK_BOT_TOKEN: ${{ inputs.slack-bot-token }}
+        SLACK_BOT_TOKEN: ${{ env.SLACK_BOT_TOKEN }}
         SLACK_CHANNEL_ID: ${{ inputs.slack-channel-id }}
 
     # Cleanup (always runs)
