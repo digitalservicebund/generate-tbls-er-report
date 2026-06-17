@@ -97,6 +97,13 @@ inputs:
     description: "Slack bot token used for failure notifications."
     required: false
     default: ""
+  postgres_extensions:
+    description: >
+      Comma-separated list of PostgreSQL extensions to enable before running
+      migrations (e.g. "uuid-ossp,pg_trgm"). Each is created with
+      CREATE EXTENSION IF NOT EXISTS inside the docdb database.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -165,6 +172,20 @@ runs:
             break
           fi
           sleep 2
+        done
+
+    # Enable optional PostgreSQL extensions
+    - name: Enable PostgreSQL extensions
+      if: ${{ inputs.postgres_extensions != '' }}
+      shell: bash
+      env:
+        POSTGRES_EXTENSIONS: ${{ inputs.postgres_extensions }}
+      run: |
+        echo "$POSTGRES_EXTENSIONS" | tr ',' '\n' | while read -r ext; do
+          ext="$(echo "$ext" | xargs)"  # trim whitespace
+          [ -z "$ext" ] && continue
+          docker exec postgres-er-docs psql -U docuser -d docdb \
+            -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";"
         done
 
     # Write tbls config
