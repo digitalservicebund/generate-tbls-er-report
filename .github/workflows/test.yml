@@ -17,6 +17,7 @@ jobs:
           database_name: "Test Database"
           database_desc: "Minimal schema for testing the composite action."
           migrations_path: test/migrations
+          postgres_extensions: "pg_trgm"
           skip_publish: true
           # Dummy values to verify masking - if masking works these appear as *** in the log.
           BUCKET_ACCESS_KEY_ID: "super-secret-key-id"

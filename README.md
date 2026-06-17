@@ -28,6 +28,7 @@ Contains a [GitHub composite action](https://docs.github.com/en/actions/sharing-
 | `skip_publish` | Set to `true` to skip the S3 upload step. When set, `BUCKET_ACCESS_KEY_ID` and `BUCKET_SECRET_ACCESS_KEY` are not required. | ❌ | `false` |
 | `local_artifact_path` | Directory (relative to the source repo root) where tbls writes its output | ❌ | `_tbls_generated` |
 | `flyway_version` | `flyway/flyway` Docker image tag | ❌ | `10` |
+| `postgres_extensions` | Comma-separated extensions to activate for the temporary schema. | ❌ | `""` |
 | `postgres_version` | `postgres` Docker image tag | ❌ | `14` |
 | `tbls_version` | `k1low/tbls` Docker image tag | ❌ | `v1.94.5` |
 | `tbls_config` | tbls YAML config string. `dsn`, `docPath`, `name`, and `desc` are always injected automatically. See [tbls_config](#tbls_config). | ❌ | Mermaid ERD |
