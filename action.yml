@@ -67,6 +67,13 @@ inputs:
     description: "postgres Docker image tag"
     required: false
     default: "14"
+  postgres_extensions:
+    description: >
+      Comma-separated list of PostgreSQL extensions to enable before running
+      migrations (e.g. "uuid-ossp,pg_trgm"). Each is created with
+      CREATE EXTENSION IF NOT EXISTS inside the docdb database.
+    required: false
+    default: ""
   tbls_version:
     description: "k1low/tbls Docker image tag"
     required: false
@@ -95,13 +102,6 @@ inputs:
     default: ""
   SLACK_BOT_TOKEN:
     description: "Slack bot token used for failure notifications."
-    required: false
-    default: ""
-  postgres_extensions:
-    description: >
-      Comma-separated list of PostgreSQL extensions to enable before running
-      migrations (e.g. "uuid-ossp,pg_trgm"). Each is created with
-      CREATE EXTENSION IF NOT EXISTS inside the docdb database.
     required: false
     default: ""
 
