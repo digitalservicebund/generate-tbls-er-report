@@ -1,6 +1,11 @@
-name: Test Composite Action
+name: CI Pipeline
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Allow to run this workflow manually
   workflow_dispatch:
 
 jobs:
@@ -32,3 +37,20 @@ jobs:
           echo "BUCKET_ACCESS_KEY_ID: super-secret-key-id"
           echo "BUCKET_SECRET_ACCESS_KEY: super-secret-access-key"
           echo "SLACK_BOT_TOKEN: super-secret-slack-token"
+  
+  #######################################
+  # Automerge if dependabot branch and requirements are met
+  #######################################
+
+  dependabot-auto-merge:
+    # the ${{ success() }} is required for the "if" not to override the "needs" below
+    if: ${{ success() && github.actor == 'dependabot[bot]' && !cancelled() && github.ref != 'refs/heads/main' }}
+    needs:
+      - test
+    uses: ./.github/workflows/dependabot-auto-merge.yml
+    permissions:
+      contents: write
+      pull-requests: write
+    secrets:
+      AUTO_MERGE_NEURIS_APP_APP_ID: ${{ secrets.AUTO_MERGE_NEURIS_APP_APP_ID }}
+      AUTO_MERGE_NEURIS_APP_PRIVATE_KEY: ${{ secrets.AUTO_MERGE_NEURIS_APP_PRIVATE_KEY }}
