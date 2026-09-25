@@ -257,7 +257,7 @@ runs:
 
     # Notify Slack on failure, if information is provided
     - name: Send failure to Slack
-      uses: digitalservicebund/notify-on-failure-gha@671832f192aee0a068fd92b2f6deb975df794a84 # v1.6.1
+      uses: digitalservicebund/notify-on-failure-gha@b8fdda76a38fa8e94cf623ebdd03e4570bc4ceb0 # v1.9.0
       if: ${{ failure() && github.ref == 'refs/heads/main' && inputs.slack_channel_id != '' }}
       with:
         SLACK_BOT_TOKEN: ${{ env.SLACK_BOT_TOKEN }}
